@@ -10,31 +10,113 @@ import {
   MessageCircle,
   Camera,
   Calendar,
-  MapPin
+  MapPin,
+  RefreshCw,
+  Loader2
 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 import heroImage from "@/assets/hero-farming.jpg";
 
+interface WeatherData {
+  location: string;
+  temperature: number;
+  humidity: number;
+  windSpeed: number;
+  condition: string;
+  description: string;
+  forecast: string;
+  lastUpdated: string;
+}
+
+interface MarketPrice {
+  crop: string;
+  price: string;
+  unit: string;
+  change: string;
+}
+
+interface MarketData {
+  prices: MarketPrice[];
+  lastUpdated: string;
+  source: string;
+}
+
 const Dashboard = () => {
-  const weatherData = {
-    location: "Kathmandu, Nepal",
-    temperature: 24,
-    humidity: 65,
-    windSpeed: 8,
-    condition: "Partly Cloudy",
-    forecast: "Light rain expected tomorrow"
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [marketData, setMarketData] = useState<MarketData | null>(null);
+  const [loadingWeather, setLoadingWeather] = useState(true);
+  const [loadingMarket, setLoadingMarket] = useState(true);
+  const { toast } = useToast();
+
+  const fetchWeatherData = async () => {
+    setLoadingWeather(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('get-weather', {
+        body: { city: 'Kathmandu' }
+      });
+
+      if (error) throw error;
+      
+      setWeatherData(data);
+      toast({
+        title: "Weather Updated",
+        description: "Latest weather data loaded successfully",
+      });
+    } catch (error) {
+      console.error('Error fetching weather:', error);
+      toast({
+        title: "Weather Error",
+        description: "Could not fetch weather data",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingWeather(false);
+    }
   };
 
-  const marketPrices = [
-    { crop: "Rice", price: "₹85/kg", change: "+2.5%" },
-    { crop: "Wheat", price: "₹45/kg", change: "-1.2%" },
-    { crop: "Maize", price: "₹38/kg", change: "+3.8%" },
-    { crop: "Potato", price: "₹32/kg", change: "+0.5%" }
-  ];
+  const fetchMarketData = async () => {
+    setLoadingMarket(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('get-market-prices');
 
-  const todaysTips = [
-    "Apply organic fertilizer to tomato plants",
-    "Check for pest damage on cucumber leaves",
-    "Prepare soil for winter wheat planting"
+      if (error) throw error;
+      
+      setMarketData(data);
+      toast({
+        title: "Market Prices Updated",
+        description: `${data.prices.length} prices loaded from ${data.source}`,
+      });
+    } catch (error) {
+      console.error('Error fetching market data:', error);
+      toast({
+        title: "Market Data Error", 
+        description: "Could not fetch market prices",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingMarket(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchWeatherData();
+    fetchMarketData();
+  }, []);
+
+  const todaysTips = weatherData ? [
+    weatherData.forecast,
+    weatherData.temperature > 30 
+      ? "High temperature - increase irrigation frequency"
+      : "Moderate temperature - normal irrigation schedule",
+    weatherData.humidity > 80
+      ? "High humidity - monitor crops for fungal diseases"
+      : "Good humidity levels for most crops"
+  ] : [
+    "Loading farming recommendations...",
+    "Preparing daily tips based on weather",
+    "Analyzing optimal farming conditions"
   ];
 
   return (
@@ -52,10 +134,25 @@ const Dashboard = () => {
                 <p className="text-sm text-muted-foreground">Smart Farming Assistant</p>
               </div>
             </div>
-            <Button variant="outline" size="sm">
-              <MapPin className="h-4 w-4 mr-2" />
-              Kathmandu
-            </Button>
+            <div className="flex items-center space-x-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={fetchWeatherData}
+                disabled={loadingWeather}
+              >
+                {loadingWeather ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Refresh
+              </Button>
+              <Button variant="outline" size="sm">
+                <MapPin className="h-4 w-4 mr-2" />
+                {weatherData?.location?.split(',')[0] || 'Kathmandu'}
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -94,37 +191,54 @@ const Dashboard = () => {
         {/* Weather Card */}
         <Card className="shadow-card">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center text-lg">
-              <Cloud className="h-5 w-5 mr-2 text-primary" />
-              Weather Today
+            <CardTitle className="flex items-center justify-between text-lg">
+              <div className="flex items-center">
+                <Cloud className="h-5 w-5 mr-2 text-primary" />
+                Weather Today
+              </div>
+              {loadingWeather && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-2xl font-bold text-foreground">{weatherData.temperature}°C</p>
-                <p className="text-sm text-muted-foreground">{weatherData.condition}</p>
+                <p className="text-2xl font-bold text-foreground">
+                  {weatherData?.temperature || '--'}°C
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {weatherData?.condition || 'Loading...'}
+                </p>
               </div>
               <div className="text-right">
-                <p className="text-sm text-muted-foreground">{weatherData.location}</p>
-                <p className="text-sm font-medium text-accent">{weatherData.forecast}</p>
+                <p className="text-sm text-muted-foreground">
+                  {weatherData?.location || 'Kathmandu, Nepal'}
+                </p>
+                <p className="text-sm font-medium text-accent">
+                  {weatherData?.description || 'Fetching forecast...'}
+                </p>
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4 pt-3 border-t">
               <div className="text-center">
                 <Thermometer className="h-4 w-4 mx-auto mb-1 text-earth" />
                 <p className="text-xs text-muted-foreground">Temperature</p>
-                <p className="text-sm font-medium">{weatherData.temperature}°C</p>
+                <p className="text-sm font-medium">
+                  {weatherData?.temperature || '--'}°C
+                </p>
               </div>
               <div className="text-center">
                 <Droplets className="h-4 w-4 mx-auto mb-1 text-accent" />
                 <p className="text-xs text-muted-foreground">Humidity</p>
-                <p className="text-sm font-medium">{weatherData.humidity}%</p>
+                <p className="text-sm font-medium">
+                  {weatherData?.humidity || '--'}%
+                </p>
               </div>
               <div className="text-center">
                 <Wind className="h-4 w-4 mx-auto mb-1 text-primary" />
                 <p className="text-xs text-muted-foreground">Wind</p>
-                <p className="text-sm font-medium">{weatherData.windSpeed} km/h</p>
+                <p className="text-sm font-medium">
+                  {weatherData?.windSpeed || '--'} km/h
+                </p>
               </div>
             </div>
           </CardContent>
@@ -173,14 +287,36 @@ const Dashboard = () => {
         {/* Market Prices */}
         <Card className="shadow-card">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center text-lg">
-              <TrendingUp className="h-5 w-5 mr-2 text-earth" />
-              Today's Market Prices
+            <CardTitle className="flex items-center justify-between text-lg">
+              <div className="flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2 text-earth" />
+                Market Prices - Kalimati
+              </div>
+              <div className="flex items-center space-x-2">
+                {loadingMarket && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={fetchMarketData}
+                  disabled={loadingMarket}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </Button>
+              </div>
             </CardTitle>
+            {marketData?.source && (
+              <p className="text-xs text-muted-foreground">
+                Source: {marketData.source} • Updated: {
+                  marketData.lastUpdated ? 
+                  new Date(marketData.lastUpdated).toLocaleTimeString() : 
+                  'Loading...'
+                }
+              </p>
+            )}
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {marketPrices.map((item, index) => (
+              {marketData?.prices?.slice(0, 6).map((item, index) => (
                 <div key={index} className="flex items-center justify-between py-2 border-b border-border/50 last:border-b-0">
                   <div className="flex items-center space-x-3">
                     <div className="w-2 h-2 bg-primary rounded-full" />
@@ -193,7 +329,12 @@ const Dashboard = () => {
                     </p>
                   </div>
                 </div>
-              ))}
+              )) || (
+                <div className="text-center py-4">
+                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Loading market prices...</p>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
