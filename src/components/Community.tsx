@@ -76,13 +76,28 @@ const Community = () => {
   const handleSend = async () => {
     if (!input.trim()) return;
     const name = (username && username.trim()) || "Anonymous";
+    // Optimistic update: create a temporary local message so it appears instantly
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const now = new Date().toISOString();
+    const tempMsg: ChatRow = { id: tempId, username: name, message: input.trim(), inserted_at: now };
+    setMessages((m) => [...m, tempMsg]);
+    setInput("");
+    localStorage.setItem("mk_username", name);
+
     try {
-      const { error } = await sb.from("chats").insert([{ username: name, message: input.trim() }]);
+      // Insert into DB. When Supabase realtime delivers the inserted row, we'll dedupe it.
+      const { data, error } = await sb.from("chats").insert([{ username: name, message: tempMsg.message }]).select();
       if (error) throw error;
-      setInput("");
-      localStorage.setItem("mk_username", name);
+
+      // If DB returns the inserted row, replace the temp message ID with real ID
+      if (data && data.length > 0) {
+        const inserted = data[0] as ChatRow;
+        setMessages((m) => m.map((it) => (it.id === tempId ? inserted : it)));
+      }
     } catch (error) {
       console.error("Send error:", error);
+      // remove the optimistic message on failure
+      setMessages((m) => m.filter((it) => it.id !== tempId));
       toast({ title: "Send Failed", description: "Could not send message", variant: "destructive" });
     }
   };
