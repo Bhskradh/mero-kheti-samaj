@@ -21,13 +21,52 @@ type Task = {
 const PlantDoctor = () => {
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
+  // dueAt holds the local input value (YYYY-MM-DDTHH:mm) or null
   const [dueAt, setDueAt] = useState<string | null>(null);
   const [remindBefore, setRemindBefore] = useState<number>(0);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [lang, setLang] = useState<'en'|'ne'>(() => (localStorage.getItem('mk_lang') as 'en'|'ne') || 'en');
+  const [calendar, setCalendar] = useState<'ad'|'bs'>('ad');
   const { toast } = useToast();
   const { sendNotification } = useNotifications();
 
   const sb = supabase as any;
+
+  // Helpers: parse local datetime-local input to UTC ISO string for DB
+  const parseLocalToISOString = (local?: string | null) => {
+    if (!local) return null;
+    // expected format: YYYY-MM-DDTHH:mm
+    const [datePart, timePart] = local.split('T');
+    if (!datePart || !timePart) return null;
+    const [y, m, d] = datePart.split('-').map(Number);
+    const [hh, mm] = timePart.split(':').map(Number);
+    const dt = new Date(y, m - 1, d, hh, mm, 0, 0);
+    return dt.toISOString();
+  };
+
+  const isoToLocalInput = (iso?: string | null) => {
+    if (!iso) return null;
+    const dt = new Date(iso);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const date = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+    const time = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    return `${date}T${time}`;
+  };
+
+  // Nepali digit conversion (0-9)
+  const toNepaliDigits = (s: string) => s.replace(/[0-9]/g, (d) => '०१२३४५६७८९'[Number(d)]);
+
+  // Very simple AD -> BS approximation: adds 56 years and 8 months. This is approximate.
+  // For accurate conversion use a proper library/mapping. This function is a placeholder.
+  const convertADtoBS = (iso?: string | null) => {
+    if (!iso) return null;
+    const dt = new Date(iso);
+    let year = dt.getFullYear() + 56;
+    let month = dt.getMonth() + 1 + 8; // +8 months
+    let day = dt.getDate();
+    while (month > 12) { month -= 12; year += 1; }
+    return `${year}-${month.toString().padStart(2,'0')}-${day.toString().padStart(2,'0')}`;
+  };
 
   const loadTasks = async () => {
     try {
@@ -109,8 +148,18 @@ const PlantDoctor = () => {
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-foreground mb-2">Farm Tasks & Reminders</h2>
-        <p className="text-muted-foreground">Schedule work, pesticide application, and feeding reminders</p>
+        <h2 className="text-2xl font-bold text-foreground mb-2">{lang === 'ne' ? 'टुडु सूची' : 'Todo List'}</h2>
+        <p className="text-muted-foreground">{lang === 'ne' ? 'कामको समय, विषादी र पालनपोषण सम्झनाहरू सेट गर्नुहोस्' : 'Schedule work, pesticide application, and feeding reminders'}</p>
+        <div className="mt-2 flex justify-center gap-2">
+          <select value={lang} onChange={(e) => { const v = e.target.value as 'en'|'ne'; setLang(v); localStorage.setItem('mk_lang', v); }} className="border p-1 rounded">
+            <option value="en">English</option>
+            <option value="ne">नेपाली</option>
+          </select>
+          <select value={calendar} onChange={(e) => setCalendar(e.target.value as 'ad'|'bs')} className="border p-1 rounded">
+            <option value="ad">AD</option>
+            <option value="bs">BS</option>
+          </select>
+        </div>
       </div>
 
       <Card className="shadow-card">
@@ -119,11 +168,11 @@ const PlantDoctor = () => {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            <Input placeholder="Task title" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Textarea placeholder="Details (optional)" value={details} onChange={(e) => setDetails(e.target.value)} />
+            <Input placeholder={lang === 'ne' ? 'कार्य शीर्षक' : 'Task title'} value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Textarea placeholder={lang === 'ne' ? 'विवरण (ऐच्छिक)' : 'Details (optional)'} value={details} onChange={(e) => setDetails(e.target.value)} />
             <div className="flex gap-2">
               <Input type="datetime-local" value={dueAt || ''} onChange={(e) => setDueAt(e.target.value || null)} />
-              <Input type="number" value={remindBefore} onChange={(e) => setRemindBefore(Number(e.target.value))} placeholder="Remind seconds before" />
+              <Input type="number" value={remindBefore} onChange={(e) => setRemindBefore(Number(e.target.value))} placeholder={lang === 'ne' ? 'स्मरण सेकेन्ड अघि' : 'Remind seconds before'} />
             </div>
             <div className="flex gap-2">
               <Button onClick={handleAdd}><PlusCircle className="h-4 w-4 mr-2" />Add Task</Button>
@@ -134,7 +183,7 @@ const PlantDoctor = () => {
 
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle>Upcoming Tasks</CardTitle>
+          <CardTitle>{lang === 'ne' ? 'आउँदै गरेका कार्यहरू' : 'Upcoming Tasks'}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -143,7 +192,16 @@ const PlantDoctor = () => {
                 <div>
                   <div className="flex items-center gap-3">
                     <div className="font-medium text-foreground">{task.title}</div>
-                    {task.due_at && <div className="text-xs text-muted-foreground">{new Date(task.due_at).toLocaleString()}</div>}
+                    {task.due_at && (
+                      <div className="text-xs text-muted-foreground">
+                        {calendar === 'ad' ? (
+                          lang === 'ne' ? toNepaliDigits(new Date(task.due_at).toLocaleString()) : new Date(task.due_at).toLocaleString()
+                        ) : (
+                          // BS mode (approximate conversion)
+                          lang === 'ne' ? toNepaliDigits(convertADtoBS(task.due_at) || '') : (convertADtoBS(task.due_at) || '')
+                        )}
+                      </div>
+                    )}
                   </div>
                   {task.details && <div className="text-sm text-muted-foreground">{task.details}</div>}
                 </div>
