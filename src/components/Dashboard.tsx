@@ -50,21 +50,26 @@ interface MarketData {
 }
 
 const Dashboard = () => {
+  const [isSupported, setIsSupported] = useState(false);
+  const [permission, setPermission] = useState<NotificationPermission>('default');
+  const [activeModal, setActiveModal] = useState<string | null>(null);
+
+  const requestPermission = async () => {
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+    } catch (error) {
+      console.error('Error requesting notification permission:', error);
+    }
+  };
+  const [currentLocation, setCurrentLocation] = useState("Kathmandu");
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [marketData, setMarketData] = useState<MarketData | null>(null);
-  const [loadingWeather, setLoadingWeather] = useState(true);
-  const [loadingMarket, setLoadingMarket] = useState(true);
-  const [currentLocation, setCurrentLocation] = useState("Kathmandu");
-  const [activeModal, setActiveModal] = useState<string | null>(null);
   const [previousMarketData, setPreviousMarketData] = useState<MarketData | null>(null);
+  const [loadingWeather, setLoadingWeather] = useState(false);
+  const [loadingMarket, setLoadingMarket] = useState(false);
   const { toast } = useToast();
-  const { 
-    permission, 
-    requestPermission, 
-    sendWeatherAlert, 
-    sendMarketPriceAlert,
-    isSupported 
-  } = useNotifications();
+  const { sendWeatherAlert, sendMarketPriceAlert } = useNotifications();
 
   const fetchWeatherData = async (city = currentLocation) => {
     setLoadingWeather(true);
@@ -454,27 +459,6 @@ const Dashboard = () => {
               scrolling="yes"
               style={{ border: 'none', borderRadius: '8px' }}
             />
-          </div>
-        </DialogContent>
-      </Dialog>
-              <div key={index} className="flex items-center justify-between py-2 border-b border-border/50 last:border-b-0">
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 bg-primary rounded-full" />
-                  <span className="font-medium text-foreground">{item.crop}</span>
-                </div>
-                <div className="text-right">
-                  <p className="font-semibold text-foreground">{item.price}</p>
-                  <p className={`text-xs ${item.change.startsWith('+') ? 'text-success' : 'text-destructive'}`}>
-                    {item.change}
-                  </p>
-                </div>
-              </div>
-            )) || (
-              <div className="text-center py-4">
-                <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Loading market prices...</p>
-              </div>
-            )}
           </div>
         </DialogContent>
       </Dialog>
