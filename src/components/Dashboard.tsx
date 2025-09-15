@@ -18,6 +18,7 @@ import {
 import { useState, useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useNotifications } from "@/hooks/useNotifications";
 import heroImage from "@/assets/hero-farming.jpg";
 import LocationSelector from "./LocationSelector";
 import CropGuide from "./CropGuide";
@@ -55,7 +56,15 @@ const Dashboard = () => {
   const [loadingMarket, setLoadingMarket] = useState(true);
   const [currentLocation, setCurrentLocation] = useState("Kathmandu");
   const [activeModal, setActiveModal] = useState<string | null>(null);
+  const [previousMarketData, setPreviousMarketData] = useState<MarketData | null>(null);
   const { toast } = useToast();
+  const { 
+    permission, 
+    requestPermission, 
+    sendWeatherAlert, 
+    sendMarketPriceAlert,
+    isSupported 
+  } = useNotifications();
 
   const fetchWeatherData = async (city = currentLocation) => {
     setLoadingWeather(true);
@@ -67,6 +76,10 @@ const Dashboard = () => {
       if (error) throw error;
       
       setWeatherData(data);
+      
+      // Send weather alert if conditions warrant it
+      sendWeatherAlert(data, city);
+      
       toast({
         title: "Weather Updated",
         description: "Latest weather data loaded successfully",
@@ -90,6 +103,12 @@ const Dashboard = () => {
 
       if (error) throw error;
       
+      // Send market price alert if there are significant changes
+      if (marketData) {
+        sendMarketPriceAlert(data.prices, marketData.prices);
+      }
+      
+      setPreviousMarketData(marketData);
       setMarketData(data);
       toast({
         title: "Market Prices Updated",
@@ -110,6 +129,14 @@ const Dashboard = () => {
   useEffect(() => {
     fetchWeatherData();
     fetchMarketData();
+    
+    // Auto-refresh data every 30 minutes
+    const interval = setInterval(() => {
+      fetchWeatherData();
+      fetchMarketData();
+    }, 30 * 60 * 1000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const handleLocationChange = (newLocation: string) => {
@@ -155,6 +182,16 @@ const Dashboard = () => {
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              {isSupported && permission !== 'granted' && (
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={requestPermission}
+                  className="text-xs"
+                >
+                  🔔 Enable Alerts
+                </Button>
+              )}
               <Button 
                 variant="outline" 
                 size="sm"
