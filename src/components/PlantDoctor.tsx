@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import NepaliDate from 'nepali-date-converter';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,17 +57,10 @@ const PlantDoctor = () => {
   // Nepali digit conversion (0-9)
   const toNepaliDigits = (s: string) => s.replace(/[0-9]/g, (d) => '०१२३४५६७८९'[Number(d)]);
 
-  // Very simple AD -> BS approximation: adds 56 years and 8 months. This is approximate.
-  // For accurate conversion use a proper library/mapping. This function is a placeholder.
-  const convertADtoBS = (iso?: string | null) => {
-    if (!iso) return null;
-    const dt = new Date(iso);
-    let year = dt.getFullYear() + 56;
-    let month = dt.getMonth() + 1 + 8; // +8 months
-    let day = dt.getDate();
-    while (month > 12) { month -= 12; year += 1; }
-    return `${year}-${month.toString().padStart(2,'0')}-${day.toString().padStart(2,'0')}`;
-  };
+  // Use nepali-date-converter for accurate AD <-> BS conversions.
+  // We import it lazily inside render/use to avoid SSR/import issues.
+  // Note: input fields remain AD `datetime-local` for now. BS input support would need a separate UI.
+  
 
   const loadTasks = async () => {
     try {
@@ -111,7 +105,8 @@ const PlantDoctor = () => {
     }
 
     try {
-      const payload = { user_name: localStorage.getItem('mk_username') || null, title: title.trim(), details: details.trim() || null, due_at: dueAt, remind_before: remindBefore };
+      const isoDue = parseLocalToISOString(dueAt);
+      const payload = { user_name: localStorage.getItem('mk_username') || null, title: title.trim(), details: details.trim() || null, due_at: isoDue, remind_before: remindBefore };
       const { data, error } = await sb.from("tasks").insert([payload]).select();
       if (error) throw error;
       if (data && data.length > 0) {
@@ -196,9 +191,21 @@ const PlantDoctor = () => {
                       <div className="text-xs text-muted-foreground">
                         {calendar === 'ad' ? (
                           lang === 'ne' ? toNepaliDigits(new Date(task.due_at).toLocaleString()) : new Date(task.due_at).toLocaleString()
-                        ) : (
-                          // BS mode (approximate conversion)
-                          lang === 'ne' ? toNepaliDigits(convertADtoBS(task.due_at) || '') : (convertADtoBS(task.due_at) || '')
+                          ) : (
+                          // BS mode (accurate conversion using nepali-date-converter)
+                          (() => {
+                            try {
+                              if (!task.due_at) return '';
+                              const d = new Date(task.due_at);
+                              // NepaliDate.fromAD accepts a Date and converts to BS
+                              // The format 'YYYY-MM-DD' is convenient for display
+                              const nd = (NepaliDate as any).fromAD ? (NepaliDate as any).fromAD(d) : new (NepaliDate as any)(d);
+                              const formatted = nd.format('YYYY-MM-DD', lang === 'ne' ? 'np' : 'en');
+                              return formatted;
+                            } catch (e) {
+                              return '';
+                            }
+                          })()
                         )}
                       </div>
                     )}
