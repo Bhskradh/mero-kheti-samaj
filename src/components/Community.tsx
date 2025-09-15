@@ -20,6 +20,7 @@ const Community = () => {
   const [input, setInput] = useState("");
   const [username, setUsername] = useState<string>(() => localStorage.getItem("mk_username") || "");
   const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState<number>(0);
   const { toast } = useToast();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -75,6 +76,10 @@ const Community = () => {
 
   const handleSend = async () => {
     if (!input.trim()) return;
+    if (cooldown > 0) {
+      toast({ title: "Please wait", description: `You can send another message in ${cooldown}s`, variant: "destructive" });
+      return;
+    }
     const name = (username && username.trim()) || "Anonymous";
     // Optimistic update: create a temporary local message so it appears instantly
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
@@ -94,6 +99,15 @@ const Community = () => {
         const inserted = data[0] as ChatRow;
         setMessages((m) => m.map((it) => (it.id === tempId ? inserted : it)));
       }
+      // Start 30s cooldown after successful send
+      setCooldown(30);
+      const timer = setInterval(() => setCooldown((c) => {
+        if (c <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return c - 1;
+      }), 1000);
     } catch (error) {
       console.error("Send error:", error);
       // remove the optimistic message on failure
@@ -131,12 +145,12 @@ const Community = () => {
             <div ref={bottomRef} />
           </div>
 
-          <div className="p-4 border-t flex gap-2 items-center">
+            <div className="p-4 border-t flex gap-2 items-center">
             <Input placeholder="Your name (optional)" value={username} onChange={(e) => setUsername(e.target.value)} className="w-48" />
             <Input placeholder="Write a message..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }} />
-            <Button onClick={handleSend}>
+            <Button onClick={handleSend} disabled={cooldown > 0}>
               <Send className="h-4 w-4 mr-2" />
-              Send
+              {cooldown > 0 ? `Wait ${cooldown}s` : 'Send'}
             </Button>
           </div>
         </CardContent>
