@@ -69,6 +69,27 @@ export const useNotifications = () => {
       setTimeout(() => {
         notification.close();
       }, 5000);
+      // Vibrate (if supported)
+      if ('vibrate' in navigator) {
+        try { navigator.vibrate([200, 100, 200]); } catch {}
+      }
+      // Play a short beep using Web Audio API
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 880;
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start();
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.1, ctx.currentTime + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.2);
+        setTimeout(() => { o.stop(); ctx.close(); }, 300);
+      } catch (err) {
+        // ignore audio errors
+      }
     } else {
       // Fallback to toast notification
       toast({

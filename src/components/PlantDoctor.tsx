@@ -1,187 +1,156 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Camera, Upload, Loader2, AlertTriangle, CheckCircle } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { PlusCircle, Check, Clock, Trash } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useNotifications } from "@/hooks/useNotifications";
 
-const commonDiseases = [
-  {
-    name: "Late Blight (Potato)",
-    symptoms: "Dark spots on leaves, white mold on undersides",
-    treatment: "Remove affected plants, apply copper fungicide",
-    prevention: "Use resistant varieties, ensure good drainage"
-  },
-  {
-    name: "Stem Borer (Rice)",
-    symptoms: "Yellowing of leaves, holes in stems",
-    treatment: "Use pheromone traps, apply biological pesticides",
-    prevention: "Remove crop residues, use resistant varieties"
-  },
-  {
-    name: "Aphids",
-    symptoms: "Small green insects on leaves, sticky honeydew",
-    treatment: "Spray neem oil, introduce ladybugs",
-    prevention: "Regular monitoring, companion planting"
-  },
-  {
-    name: "Powdery Mildew",
-    symptoms: "White powdery coating on leaves",
-    treatment: "Apply sulfur-based fungicide, improve air circulation",
-    prevention: "Avoid overhead watering, plant in sunny areas"
-  }
-];
+type Task = {
+  id: string;
+  user_name?: string | null;
+  title: string;
+  details?: string | null;
+  due_at?: string | null;
+  remind_before?: number | null;
+  completed?: boolean;
+};
 
 const PlantDoctor = () => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [diagnosis, setDiagnosis] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [details, setDetails] = useState("");
+  const [dueAt, setDueAt] = useState<string | null>(null);
+  const [remindBefore, setRemindBefore] = useState<number>(0);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const { toast } = useToast();
+  const { sendNotification } = useNotifications();
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setDiagnosis(null);
+  const sb = supabase as any;
+
+  const loadTasks = async () => {
+    try {
+      const { data, error } = await sb.from("tasks").select("id, user_name, title, details, due_at, remind_before, completed").order("created_at", { ascending: false }).limit(50);
+      if (error) throw error;
+      setTasks(data || []);
+    } catch (err) {
+      console.error(err);
+      toast({ title: "Error", description: "Could not load tasks", variant: "destructive" });
     }
   };
 
-  const analyzePlant = async () => {
-    if (!selectedFile) {
-      toast({
-        title: "No Image Selected",
-        description: "Please select a plant image first",
-        variant: "destructive",
-      });
+  useEffect(() => {
+    loadTasks();
+  }, []);
+
+  // Schedule reminders for upcoming tasks locally
+  useEffect(() => {
+    const timers: Array<{ id: string; t: number }> = [];
+    const now = Date.now();
+    tasks.forEach((task) => {
+      if (task.completed) return;
+      if (!task.due_at) return;
+      const due = new Date(task.due_at).getTime();
+      const remindAt = due - ((task.remind_before || 0) * 1000);
+      if (remindAt <= now) return; // missed or immediate
+      const timeout = window.setTimeout(() => {
+        sendNotification({ title: `Reminder: ${task.title}`, body: task.details || "", requireInteraction: true });
+      }, remindAt - now);
+      timers.push({ id: task.id, t: timeout });
+    });
+
+    return () => {
+      timers.forEach((x) => clearTimeout(x.t));
+    };
+  }, [tasks]);
+
+  const handleAdd = async () => {
+    if (!title.trim()) {
+      toast({ title: "Title required", description: "Please enter a task title", variant: "destructive" });
       return;
     }
 
-    setIsAnalyzing(true);
-    
-    // Simulate AI analysis
-    setTimeout(() => {
-      const randomDisease = commonDiseases[Math.floor(Math.random() * commonDiseases.length)];
-      setDiagnosis(randomDisease.name);
-      setIsAnalyzing(false);
-      
-      toast({
-        title: "Analysis Complete",
-        description: `Possible diagnosis: ${randomDisease.name}`,
-      });
-    }, 3000);
+    try {
+      const payload = { user_name: localStorage.getItem('mk_username') || null, title: title.trim(), details: details.trim() || null, due_at: dueAt, remind_before: remindBefore };
+      const { data, error } = await sb.from("tasks").insert([payload]).select();
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setTasks((t) => [data[0], ...t]);
+        setTitle(""); setDetails(""); setDueAt(null); setRemindBefore(0);
+        toast({ title: "Task added", description: "Your task was saved" });
+      }
+    } catch (err) {
+      console.error(err);
+      toast({ title: "Error", description: "Could not save task", variant: "destructive" });
+    }
   };
 
-  const selectedDisease = diagnosis ? commonDiseases.find(d => d.name === diagnosis) : null;
+  const toggleComplete = async (task: Task) => {
+    try {
+      const { error } = await sb.from("tasks").update({ completed: !task.completed }).eq('id', task.id);
+      if (error) throw error;
+      setTasks((t) => t.map((x) => x.id === task.id ? { ...x, completed: !x.completed } : x));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const removeTask = async (task: Task) => {
+    try {
+      const { error } = await sb.from("tasks").delete().eq('id', task.id);
+      if (error) throw error;
+      setTasks((t) => t.filter((x) => x.id !== task.id));
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-foreground mb-2">Plant Doctor</h2>
-        <p className="text-muted-foreground">Upload plant photos for disease diagnosis</p>
+        <h2 className="text-2xl font-bold text-foreground mb-2">Farm Tasks & Reminders</h2>
+        <p className="text-muted-foreground">Schedule work, pesticide application, and feeding reminders</p>
       </div>
 
-      {/* Image Upload Section */}
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle className="flex items-center">
-            <Camera className="h-5 w-5 mr-2 text-primary" />
-            Upload Plant Image
-          </CardTitle>
+          <CardTitle>Add Task</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-            {selectedFile ? (
-              <div className="space-y-2">
-                <img 
-                  src={URL.createObjectURL(selectedFile)} 
-                  alt="Selected plant" 
-                  className="max-h-48 mx-auto rounded-lg"
-                />
-                <p className="text-sm text-foreground">{selectedFile.name}</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Upload className="h-12 w-12 mx-auto text-muted-foreground" />
-                <p className="text-muted-foreground">Select an image of your plant</p>
-              </div>
-            )}
-          </div>
-          
-          <div className="flex gap-2">
-            <Input
-              type="file"
-              accept="image/*"
-              onChange={handleFileSelect}
-              className="hidden"
-              id="plant-image"
-            />
-            <label htmlFor="plant-image">
-              <Button variant="outline" className="cursor-pointer">
-                <Camera className="h-4 w-4 mr-2" />
-                Choose Image
-              </Button>
-            </label>
-            
-            <Button 
-              onClick={analyzePlant}
-              disabled={!selectedFile || isAnalyzing}
-              className="flex-1"
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="h-4 w-4 mr-2" />
-                  Diagnose Plant
-                </>
-              )}
-            </Button>
+        <CardContent>
+          <div className="space-y-3">
+            <Input placeholder="Task title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Textarea placeholder="Details (optional)" value={details} onChange={(e) => setDetails(e.target.value)} />
+            <div className="flex gap-2">
+              <Input type="datetime-local" value={dueAt || ''} onChange={(e) => setDueAt(e.target.value || null)} />
+              <Input type="number" value={remindBefore} onChange={(e) => setRemindBefore(Number(e.target.value))} placeholder="Remind seconds before" />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleAdd}><PlusCircle className="h-4 w-4 mr-2" />Add Task</Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Diagnosis Results */}
-      {selectedDisease && (
-        <Card className="shadow-card border-l-4 border-l-primary">
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <CheckCircle className="h-5 w-5 mr-2 text-success" />
-              Diagnosis: {selectedDisease.name}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <h4 className="font-semibold text-foreground mb-2">Symptoms:</h4>
-              <p className="text-sm text-muted-foreground">{selectedDisease.symptoms}</p>
-            </div>
-            
-            <div>
-              <h4 className="font-semibold text-foreground mb-2">Treatment:</h4>
-              <p className="text-sm text-muted-foreground">{selectedDisease.treatment}</p>
-            </div>
-            
-            <div>
-              <h4 className="font-semibold text-foreground mb-2">Prevention:</h4>
-              <p className="text-sm text-muted-foreground">{selectedDisease.prevention}</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Common Diseases Reference */}
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle>Common Plant Diseases in Nepal</CardTitle>
+          <CardTitle>Upcoming Tasks</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4">
-            {commonDiseases.map((disease, index) => (
-              <div key={index} className="border border-border rounded-lg p-3">
-                <h4 className="font-semibold text-foreground mb-1">{disease.name}</h4>
-                <p className="text-xs text-muted-foreground">{disease.symptoms}</p>
+          <div className="space-y-3">
+            {tasks.map((task) => (
+              <div key={task.id} className="flex items-start justify-between p-3 border border-border rounded-lg">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <div className="font-medium text-foreground">{task.title}</div>
+                    {task.due_at && <div className="text-xs text-muted-foreground">{new Date(task.due_at).toLocaleString()}</div>}
+                  </div>
+                  {task.details && <div className="text-sm text-muted-foreground">{task.details}</div>}
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <Button variant="ghost" onClick={() => toggleComplete(task)}>{task.completed ? <Check/> : <Clock/>}</Button>
+                  <Button variant="ghost" onClick={() => removeTask(task)}><Trash/></Button>
+                </div>
               </div>
             ))}
           </div>
