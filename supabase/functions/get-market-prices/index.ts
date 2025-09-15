@@ -1,12 +1,12 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -86,36 +86,48 @@ function extractPricesFromHTML(html: string) {
   const prices = [];
   
   try {
-    // Find price entries in the format: | Commodity | Unit | Min | Max | Avg |
-    const priceRegex = /\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
+    // Find any content that looks like a row with commodity and prices
+    const priceRegex = /\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
     let match;
     
     // List of items to exclude (non-vegetables/fruits)
     const excludeItems = [
       'fish', 'download', 'get it on', 'app store', 
       'google play', 'ramro patro', 'contact us', 'features',
-      'festivals', 'calendar'
+      'festivals', 'calendar', 'empty', 'blank'
     ];
 
-    // List of valid units
-    const validUnits = ['kg', 'doz', '1 pc'];
+    // Process HTML to clean up some common issues
+    html = html.replace(/\r\n/g, '\n')  // Normalize line endings
+             .replace(/\n+/g, '\n')     // Remove multiple line breaks
+             .replace(/\|{2,}/g, '|');   // Remove multiple pipes
+    
+    console.log('Starting to extract prices from HTML');
     
     while ((match = priceRegex.exec(html)) !== null) {
-      const [, commodity, unit, min, max, avg] = match;
+      const [fullMatch, commodity, unit, min, max, avg] = match;
       const commodityLower = commodity.trim().toLowerCase();
       const unitLower = unit.trim().toLowerCase();
+      
+      // Debug logging
+      console.log('Found match:', { commodity: commodity.trim(), unit: unitLower, min, max, avg });
       
       // Skip empty entries, non-vegetable content, and ensure proper formatting
       if (commodity && 
           commodityLower && 
           unit &&
-          validUnits.includes(unitLower) &&
+          // Basic validation for commodity name
+          commodityLower.length >= 2 &&
           !excludeItems.some(item => commodityLower.includes(item)) &&
           !commodityLower.match(/^\s*$/) && // Skip blank lines
           !commodityLower.match(/^[0-9]+$/) && // Skip numeric-only entries
-          unit.trim().length > 0 && // Ensure unit is not empty
-          // Validate price ranges
+          // Basic unit validation
+          unitLower.length > 0 && 
+          (unitLower === 'kg' || unitLower === 'doz' || unitLower === 'pc' || unitLower.includes('kg')) &&
+          // Price validation
           parseInt(min) > 0 && 
+          parseInt(max) > 0 &&
+          parseInt(avg) > 0 &&
           parseInt(max) >= parseInt(min) &&
           parseInt(avg) >= parseInt(min) &&
           parseInt(avg) <= parseInt(max)
@@ -125,23 +137,49 @@ function extractPricesFromHTML(html: string) {
         const avgPrice = parseInt(avg);
         
         if (!isNaN(avgPrice) && avgPrice > 0) {
-          prices.push({
+          const priceEntry = {
             crop: commodity.trim(),
             price: `Rs. ${avgPrice}/${unit.trim().toLowerCase()}`,
             unit: unit.trim().toLowerCase(),
             change: calculateChange(minPrice, maxPrice, avgPrice)
-          });
+          };
+          
+          console.log('Adding price entry:', priceEntry);
+          prices.push(priceEntry);
+        } else {
+          console.log('Skipping invalid price:', { commodity, unit, min, max, avg });
         }
+      } else {
+        console.log('Skipping entry due to validation:', { 
+          commodity, 
+          unit, 
+          min, 
+          max, 
+          avg,
+          reason: !commodity ? 'empty commodity' :
+                 !unit ? 'empty unit' :
+                 commodityLower.length < 2 ? 'commodity too short' :
+                 parseInt(min) <= 0 ? 'invalid min price' :
+                 parseInt(max) <= 0 ? 'invalid max price' :
+                 parseInt(avg) <= 0 ? 'invalid avg price' :
+                 'failed validation rules'
+        });
       }
     }
+    
+    console.log(`Found ${prices.length} valid prices before sorting`);
+    
   } catch (error) {
     console.error('Error parsing HTML:', error);
   }
   
   // Sort prices by crop name for consistency
-  return prices
+  const sortedPrices = prices
     .sort((a, b) => a.crop.localeCompare(b.crop))
     .slice(0, 15); // Limit to top 15 items
+    
+  console.log(`Returning ${sortedPrices.length} prices after sorting and limiting`);
+  return sortedPrices;
 }
 
 function calculateChange(min: number, max: number, avg: number): string {
