@@ -13,7 +13,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    console.log('Scraping market prices from ramropatro.com');
+    console.log('Scraping market prices from nepalicalendar.rat32.com');
 
     const fetchWithRetry = async (url: string, retries = 3) => {
       for (let i = 0; i < retries; i++) {
@@ -31,7 +31,7 @@ serve(async (req: Request) => {
       throw new Error('Failed after retries');
     };
 
-    const html = await fetchWithRetry('https://ramropatro.com/vegetable');
+    const html = await fetchWithRetry('https://nepalicalendar.rat32.com/vegetable/embed.php');
 
     // Extract prices from HTML table
     const marketPrices = extractPricesFromHTML(html);
@@ -43,7 +43,7 @@ serve(async (req: Request) => {
     const marketData = {
       prices: marketPrices.slice(0, 15), // Show top 15 items
       lastUpdated: new Date().toISOString(),
-      source: 'Ramro Patro - Kalimati Market',
+      source: 'Nepali Calendar - Kalimati Market',
       total: marketPrices.length,
       success: true
     };
@@ -86,15 +86,14 @@ function extractPricesFromHTML(html: string) {
   const prices = [];
   
   try {
-    // Find any content that looks like a row with commodity and prices
-    const priceRegex = /\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
+    // Find table rows with commodity and prices
+    const priceRegex = /\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
     let match;
     
     // List of items to exclude (non-vegetables/fruits)
     const excludeItems = [
-      'fish', 'download', 'get it on', 'app store', 
-      'google play', 'ramro patro', 'contact us', 'features',
-      'festivals', 'calendar', 'empty', 'blank'
+      'fish', 'expensive', 'empty', 'blank', 'price',
+      'daily prices', 'kalimati', 'market', 'rate'
     ];
 
     // Process HTML to clean up some common issues
