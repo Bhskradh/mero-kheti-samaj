@@ -15,26 +15,49 @@ serve(async (req) => {
   try {
     console.log('Scraping market prices from ramropatro.com');
 
-    const response = await fetch('https://ramropatro.com/vegetable');
-    const html = await response.text();
+    const fetchWithRetry = async (url: string, retries = 3) => {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return await response.text();
+        } catch (e) {
+          if (i === retries - 1) throw e;
+          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
+      }
+      throw new Error('Failed after retries');
+    };
+
+    const html = await fetchWithRetry('https://ramropatro.com/vegetable');
 
     // Extract prices from HTML table
     const marketPrices = extractPricesFromHTML(html);
     
+    if (marketPrices.length === 0) {
+      throw new Error('No valid market prices found');
+    }
+
     const marketData = {
-      prices: marketPrices.slice(0, 8), // Show top 8 items
+      prices: marketPrices.slice(0, 15), // Show top 15 items
       lastUpdated: new Date().toISOString(),
-      source: 'Ramro Patro - Kalimati Market'
+      source: 'Ramro Patro - Kalimati Market',
+      total: marketPrices.length,
+      success: true
     };
 
     console.log(`Market data scraped successfully - ${marketPrices.length} items found`);
 
     return new Response(JSON.stringify(marketData), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 200
     });
 
-  } catch (error) {
-    console.error('Error in get-market-prices function:', error);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    console.error('Error in get-market-prices function:', errorMessage);
     
     // Fallback data
     const fallbackPrices = [
@@ -46,7 +69,7 @@ serve(async (req) => {
     
     return new Response(
       JSON.stringify({ 
-        error: error.message,
+        error: errorMessage,
         prices: fallbackPrices,
         lastUpdated: new Date().toISOString(),
         source: 'Fallback data'
@@ -63,87 +86,62 @@ function extractPricesFromHTML(html: string) {
   const prices = [];
   
   try {
-    // Look for table with vegetable prices
-    const tableRegex = /<table[^>]*class="[^"]*table[^"]*"[^>]*>(.*?)<\/table>/gis;
-    const tableMatch = html.match(tableRegex);
+    // Find price entries in the format: | Commodity | Unit | Min | Max | Avg |
+    const priceRegex = /\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
+    let match;
     
-    if (tableMatch) {
-      const tableContent = tableMatch[0];
+    // List of items to exclude (non-vegetables/fruits)
+    const excludeItems = [
+      'fish', 'download', 'get it on', 'app store', 
+      'google play', 'ramro patro', 'contact us', 'features',
+      'festivals', 'calendar'
+    ];
+
+    // List of valid units
+    const validUnits = ['kg', 'doz', '1 pc'];
+    
+    while ((match = priceRegex.exec(html)) !== null) {
+      const [, commodity, unit, min, max, avg] = match;
+      const commodityLower = commodity.trim().toLowerCase();
+      const unitLower = unit.trim().toLowerCase();
       
-      // Extract rows from table
-      const rowRegex = /<tr[^>]*>(.*?)<\/tr>/gis;
-      const rows = tableContent.match(rowRegex);
-      
-      if (rows) {
-        for (const row of rows) {
-          // Extract cells from each row
-          const cellRegex = /<t[dh][^>]*>(.*?)<\/t[dh]>/gis;
-          const cells = [];
-          let match;
-          
-          while ((match = cellRegex.exec(row)) !== null) {
-            // Clean HTML tags and get text content
-            const cellText = match[1].replace(/<[^>]*>/g, '').trim();
-            if (cellText) {
-              cells.push(cellText);
-            }
-          }
-          
-          // Skip header rows and empty rows
-          if (cells.length >= 4 && 
-              !cells[0].toLowerCase().includes('commodity') && 
-              !cells[0].toLowerCase().includes('item') &&
-              cells[0] !== '' && 
-              !isNaN(parseFloat(cells[cells.length - 1]))) {
-            
-            const commodity = cells[0];
-            const unit = cells[1] || 'kg';
-            const price = parseFloat(cells[cells.length - 1]) || parseFloat(cells[cells.length - 2]);
-            
-            if (commodity && price && price > 0) {
-              prices.push({
-                crop: commodity,
-                price: `Rs. ${price}/${unit.toLowerCase()}`,
-                unit: unit.toLowerCase(),
-                change: Math.random() > 0.5 ? `+${Math.floor(Math.random() * 10)}%` : `-${Math.floor(Math.random() * 5)}%`
-              });
-            }
-          }
+      // Skip empty entries, non-vegetable content, and ensure proper formatting
+      if (commodity && 
+          commodityLower && 
+          unit &&
+          validUnits.includes(unitLower) &&
+          !excludeItems.some(item => commodityLower.includes(item)) &&
+          !commodityLower.match(/^\s*$/) && // Skip blank lines
+          !commodityLower.match(/^[0-9]+$/) && // Skip numeric-only entries
+          unit.trim().length > 0 && // Ensure unit is not empty
+          // Validate price ranges
+          parseInt(min) > 0 && 
+          parseInt(max) >= parseInt(min) &&
+          parseInt(avg) >= parseInt(min) &&
+          parseInt(avg) <= parseInt(max)
+      ) {
+        const minPrice = parseInt(min);
+        const maxPrice = parseInt(max);
+        const avgPrice = parseInt(avg);
+        
+        if (!isNaN(avgPrice) && avgPrice > 0) {
+          prices.push({
+            crop: commodity.trim(),
+            price: `Rs. ${avgPrice}/${unit.trim().toLowerCase()}`,
+            unit: unit.trim().toLowerCase(),
+            change: calculateChange(minPrice, maxPrice, avgPrice)
+          });
         }
       }
     }
-    
-    // If no prices found from table, try alternative parsing
-    if (prices.length === 0) {
-      // Look for price patterns in the HTML
-      const pricePatterns = [
-        /(\w+(?:\s+\w+)*)\s*[:\-]\s*Rs?\.\s*(\d+(?:\.\d+)?)/gi,
-        /(\w+(?:\s+\w+)*)\s+Rs?\.\s*(\d+(?:\.\d+)?)/gi
-      ];
-      
-      for (const pattern of pricePatterns) {
-        let match;
-        while ((match = pattern.exec(html)) !== null && prices.length < 10) {
-          const commodity = match[1].trim();
-          const price = parseFloat(match[2]);
-          
-          if (commodity.length > 2 && price > 0) {
-            prices.push({
-              crop: commodity,
-              price: `Rs. ${price}/kg`,
-              unit: 'kg',
-              change: Math.random() > 0.5 ? `+${Math.floor(Math.random() * 10)}%` : `-${Math.floor(Math.random() * 5)}%`
-            });
-          }
-        }
-      }
-    }
-    
   } catch (error) {
     console.error('Error parsing HTML:', error);
   }
   
-  return prices.slice(0, 15); // Limit to top 15 items
+  // Sort prices by crop name for consistency
+  return prices
+    .sort((a, b) => a.crop.localeCompare(b.crop))
+    .slice(0, 15); // Limit to top 15 items
 }
 
 function calculateChange(min: number, max: number, avg: number): string {
