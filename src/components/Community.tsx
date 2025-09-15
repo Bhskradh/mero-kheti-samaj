@@ -1,189 +1,128 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { MessageCircle, Plus, User, Clock, ThumbsUp } from "lucide-react";
+import { MessageCircle, User, Clock, Send } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
-const sampleQuestions = [
-  {
-    id: 1,
-    question: "Best time to plant tomatoes in Kathmandu valley?",
-    author: "Ram Sharma",
-    time: "2 hours ago",
-    answers: 3,
-    likes: 5,
-    category: "Vegetables"
-  },
-  {
-    id: 2,
-    question: "How to control aphids in mustard crops?",
-    author: "Sita Devi",
-    time: "5 hours ago",
-    answers: 7,
-    likes: 12,
-    category: "Pest Control"
-  },
-  {
-    id: 3,
-    question: "Which potato variety is best for hills?",
-    author: "Krishna Bahadur",
-    time: "1 day ago",
-    answers: 4,
-    likes: 8,
-    category: "Crops"
-  },
-  {
-    id: 4,
-    question: "Organic fertilizer preparation at home",
-    author: "Maya Gurung",
-    time: "2 days ago",
-    answers: 15,
-    likes: 23,
-    category: "Fertilizer"
-  }
-];
+type ChatRow = {
+  id: string;
+  username: string | null;
+  message: string | null;
+  inserted_at: string;
+};
 
 const Community = () => {
-  const [showAskForm, setShowAskForm] = useState(false);
-  const [question, setQuestion] = useState("");
-  const [category, setCategory] = useState("");
+  const [messages, setMessages] = useState<ChatRow[]>([]);
+  const [input, setInput] = useState("");
+  const [username, setUsername] = useState<string>(() => localStorage.getItem("mk_username") || "");
+  const [loading, setLoading] = useState(false);
   const { toast } = useToast();
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const handleAskQuestion = () => {
-    if (!question.trim()) {
-      toast({
-        title: "Question Required",
-        description: "Please enter your question",
-        variant: "destructive",
-      });
-      return;
+  // Load recent messages (last 1 hour)
+  // `supabase` generated types don't include our new `chats` table yet in types.ts
+  // so cast to `any` to avoid TypeScript errors in this repo-local client usage.
+  const sb = supabase as any;
+
+  const loadMessages = async () => {
+    setLoading(true);
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const { data, error } = await sb
+        .from("chats")
+        .select("id, username, message, inserted_at")
+        .gt("inserted_at", oneHourAgo)
+        .order("inserted_at", { ascending: true });
+
+      if (error) throw error;
+      setMessages((data as ChatRow[]) || []);
+      // scroll to bottom
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    } catch (error) {
+      console.error("Error loading messages:", error);
+      toast({ title: "Load Error", description: "Could not load community messages", variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
+  };
 
-    toast({
-      title: "Question Posted",
-      description: "Your question has been posted to the community",
-    });
-    
-    setQuestion("");
-    setCategory("");
-    setShowAskForm(false);
+  useEffect(() => {
+    loadMessages();
+
+    // subscribe to realtime inserts
+  const channel = (supabase as any).channel("public:chats");
+
+    channel.on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "chats" },
+      (payload) => {
+        const newRow = payload.new as ChatRow;
+        setMessages((m) => [...m, newRow]);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 20);
+      }
+    );
+
+    channel.subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, []);
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    const name = (username && username.trim()) || "Anonymous";
+    try {
+      const { error } = await sb.from("chats").insert([{ username: name, message: input.trim() }]);
+      if (error) throw error;
+      setInput("");
+      localStorage.setItem("mk_username", name);
+    } catch (error) {
+      console.error("Send error:", error);
+      toast({ title: "Send Failed", description: "Could not send message", variant: "destructive" });
+    }
   };
 
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-foreground mb-2">Farming Community</h2>
-        <p className="text-muted-foreground">Connect with fellow farmers and experts</p>
+        <h2 className="text-2xl font-bold text-foreground mb-2">Farming Community Chat</h2>
+        <p className="text-muted-foreground">Live chat for farmers — messages expire after 1 hour</p>
       </div>
 
-      {/* Ask Question Button */}
-      <div className="text-center">
-        <Button 
-          onClick={() => setShowAskForm(!showAskForm)}
-          className="w-full md:w-auto"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Ask a Question
-        </Button>
-      </div>
-
-      {/* Ask Question Form */}
-      {showAskForm && (
-        <Card className="shadow-card border-l-4 border-l-primary">
-          <CardHeader>
-            <CardTitle>Ask Your Question</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-foreground">Question</label>
-              <Textarea
-                placeholder="Describe your farming question or problem..."
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-            
-            <div>
-              <label className="text-sm font-medium text-foreground">Category</label>
-              <Input
-                placeholder="e.g., Vegetables, Pest Control, Fertilizer"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-            
-            <div className="flex gap-2">
-              <Button onClick={handleAskQuestion}>Post Question</Button>
-              <Button variant="outline" onClick={() => setShowAskForm(false)}>
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Questions Feed */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-foreground">Recent Questions</h3>
-        
-        {sampleQuestions.map((q) => (
-          <Card key={q.id} className="shadow-card hover:shadow-lg transition-shadow cursor-pointer">
-            <CardContent className="p-4">
-              <div className="space-y-3">
-                <div className="flex items-start justify-between">
-                  <h4 className="font-medium text-foreground flex-1">{q.question}</h4>
-                  <Badge variant="secondary" className="ml-2">{q.category}</Badge>
-                </div>
-                
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex items-center">
-                      <User className="h-4 w-4 mr-1" />
-                      {q.author}
-                    </div>
-                    <div className="flex items-center">
-                      <Clock className="h-4 w-4 mr-1" />
-                      {q.time}
-                    </div>
+      <Card className="shadow-card">
+        <CardHeader>
+          <CardTitle>Live Chat</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="h-96 overflow-y-auto p-4 space-y-3 bg-surface">
+            {loading && <p className="text-sm text-muted-foreground">Loading messages...</p>}
+            {messages.map((m) => (
+              <div key={m.id} className="flex items-start space-x-3">
+                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">{(m.username || "A").charAt(0).toUpperCase()}</div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="font-medium text-foreground">{m.username || "Anonymous"}</div>
+                    <div className="text-xs text-muted-foreground">{new Date(m.inserted_at).toLocaleTimeString()}</div>
                   </div>
-                  
-                  <div className="flex items-center space-x-3">
-                    <div className="flex items-center">
-                      <MessageCircle className="h-4 w-4 mr-1" />
-                      {q.answers}
-                    </div>
-                    <div className="flex items-center">
-                      <ThumbsUp className="h-4 w-4 mr-1" />
-                      {q.likes}
-                    </div>
-                  </div>
+                  <div className="text-sm text-foreground">{m.message}</div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
 
-      {/* Expert Tips */}
-      <Card className="shadow-card bg-gradient-to-r from-primary/5 to-accent/5">
-        <CardHeader>
-          <CardTitle className="text-primary">Expert Tips</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="text-sm">
-              <p className="font-medium text-foreground">💡 Dr. Rajesh Thapa - Agricultural Expert</p>
-              <p className="text-muted-foreground">"Always test your soil pH before planting. Most vegetables prefer slightly acidic to neutral soil (6.0-7.0 pH)."</p>
-            </div>
-            <div className="text-sm">
-              <p className="font-medium text-foreground">🌱 Farmer Bishnu Maya</p>
-              <p className="text-muted-foreground">"Companion planting works! Plant marigolds near tomatoes to naturally repel pests."</p>
-            </div>
+          <div className="p-4 border-t flex gap-2 items-center">
+            <Input placeholder="Your name (optional)" value={username} onChange={(e) => setUsername(e.target.value)} className="w-48" />
+            <Input placeholder="Write a message..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }} />
+            <Button onClick={handleSend}>
+              <Send className="h-4 w-4 mr-2" />
+              Send
+            </Button>
           </div>
         </CardContent>
       </Card>
