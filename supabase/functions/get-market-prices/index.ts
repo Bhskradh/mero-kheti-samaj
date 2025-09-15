@@ -98,8 +98,8 @@ function extractPricesFromHTML(html: string) {
   const prices = [];
   
   try {
-    // Find table rows with commodity and prices
-    const priceRegex = /\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
+    // Simple regex to match all table rows with prices
+    const priceRegex = /\|([^|]+)\|([^|]+)\|(\d+)\|(\d+)\|(\d+)\|/g;
     let match;
     
     // List of items to exclude (only exclude non-price content)
