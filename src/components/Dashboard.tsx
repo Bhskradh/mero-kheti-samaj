@@ -210,7 +210,9 @@ const Dashboard = () => {
     return tips;
   }
 
-  const todaysTips = getFarmingTips(weatherData);
+  const todaysTips = loadingWeather
+    ? ["Loading farming tips for selected location..."]
+    : getFarmingTips(weatherData);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
