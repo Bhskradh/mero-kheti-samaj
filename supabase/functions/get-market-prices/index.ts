@@ -40,8 +40,20 @@ serve(async (req: Request) => {
       throw new Error('No valid market prices found');
     }
 
+    // Group items by category
+    const categories = {
+      vegetables: marketPrices.filter(p => !p.crop.toLowerCase().includes('fish') && !p.crop.toLowerCase().includes('meat')),
+      meat: marketPrices.filter(p => p.crop.toLowerCase().includes('fish') || p.crop.toLowerCase().includes('meat')),
+      fruits: marketPrices.filter(p => ['apple', 'banana', 'orange', 'pear', 'kiwi', 'lime', 'guava', 'papaya', 'pineapple', 'pomegranate', 'watermelon'].some(fruit => p.crop.toLowerCase().includes(fruit)))
+    };
+
     const marketData = {
-      prices: marketPrices.slice(0, 15), // Show top 15 items
+      prices: marketPrices, // Show all items
+      categories: {
+        vegetables: categories.vegetables,
+        fruits: categories.fruits,
+        meat: categories.meat
+      },
       lastUpdated: new Date().toISOString(),
       source: 'Nepali Calendar - Kalimati Market',
       total: marketPrices.length,
@@ -90,16 +102,17 @@ function extractPricesFromHTML(html: string) {
     const priceRegex = /\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|/g;
     let match;
     
-    // List of items to exclude (non-vegetables/fruits)
+    // List of items to exclude (only exclude non-price content)
     const excludeItems = [
-      'fish', 'expensive', 'empty', 'blank', 'price',
+      'empty', 'blank', 'price', 'expensive',
       'daily prices', 'kalimati', 'market', 'rate'
     ];
 
     // Process HTML to clean up some common issues
     html = html.replace(/\r\n/g, '\n')  // Normalize line endings
              .replace(/\n+/g, '\n')     // Remove multiple line breaks
-             .replace(/\|{2,}/g, '|');   // Remove multiple pipes
+             .replace(/\|{2,}/g, '|')   // Remove multiple pipes
+             .replace(/\s+/g, ' ');     // Normalize whitespace
     
     console.log('Starting to extract prices from HTML');
     
@@ -111,7 +124,7 @@ function extractPricesFromHTML(html: string) {
       // Debug logging
       console.log('Found match:', { commodity: commodity.trim(), unit: unitLower, min, max, avg });
       
-      // Skip empty entries, non-vegetable content, and ensure proper formatting
+      // Basic validation to ensure we have valid data
       if (commodity && 
           commodityLower && 
           unit &&
@@ -120,10 +133,9 @@ function extractPricesFromHTML(html: string) {
           !excludeItems.some(item => commodityLower.includes(item)) &&
           !commodityLower.match(/^\s*$/) && // Skip blank lines
           !commodityLower.match(/^[0-9]+$/) && // Skip numeric-only entries
-          // Basic unit validation
-          unitLower.length > 0 && 
-          (unitLower === 'kg' || unitLower === 'doz' || unitLower === 'pc' || unitLower.includes('kg')) &&
-          // Price validation
+          // Basic unit validation - accept any valid unit
+          unitLower.length > 0 &&
+          // Price validation - ensure prices make sense
           parseInt(min) > 0 && 
           parseInt(max) > 0 &&
           parseInt(avg) > 0 &&
@@ -173,11 +185,9 @@ function extractPricesFromHTML(html: string) {
   }
   
   // Sort prices by crop name for consistency
-  const sortedPrices = prices
-    .sort((a, b) => a.crop.localeCompare(b.crop))
-    .slice(0, 15); // Limit to top 15 items
+  const sortedPrices = prices.sort((a, b) => a.crop.localeCompare(b.crop));
     
-  console.log(`Returning ${sortedPrices.length} prices after sorting and limiting`);
+  console.log(`Returning ${sortedPrices.length} prices after sorting`);
   return sortedPrices;
 }
 
