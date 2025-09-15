@@ -157,19 +157,60 @@ const Dashboard = () => {
     setActiveModal(null);
   };
 
-  const todaysTips = weatherData ? [
-    weatherData.forecast,
-    weatherData.temperature > 30 
-      ? "High temperature - increase irrigation frequency"
-      : "Moderate temperature - normal irrigation schedule",
-    weatherData.humidity > 80
-      ? "High humidity - monitor crops for fungal diseases"
-      : "Good humidity levels for most crops"
-  ] : [
-    "Loading farming recommendations...",
-    "Preparing daily tips based on weather",
-    "Analyzing optimal farming conditions"
-  ];
+  // Generate farming tips based on actual weather data
+  function getFarmingTips(weather: WeatherData | null): string[] {
+    if (!weather) {
+      return [
+        "Loading farming recommendations...",
+        "Preparing daily tips based on weather",
+        "Analyzing optimal farming conditions"
+      ];
+    }
+    const tips: string[] = [];
+    // Always show forecast/summary
+    if (weather.forecast) tips.push(weather.forecast);
+
+    // Weather condition based tips
+    const cond = weather.condition.toLowerCase();
+    if (cond.includes("rain") || cond.includes("shower") || cond.includes("drizzle")) {
+      tips.push("Rain expected - avoid pesticide/fertilizer application, check drainage, postpone irrigation");
+    } else if (cond.includes("clear") || cond.includes("sun")) {
+      tips.push("Clear weather - good for harvesting, drying crops, and field work");
+    } else if (cond.includes("cloud")) {
+      tips.push("Cloudy weather - monitor for fungal diseases, reduce irrigation if soil is moist");
+    } else if (cond.includes("storm") || cond.includes("wind")) {
+      tips.push("Windy/stormy - secure greenhouses, support tall crops, avoid spraying");
+    }
+
+    // Temperature based tips
+    if (weather.temperature >= 35) {
+      tips.push("Very high temperature - irrigate early morning/evening, provide shade if possible");
+    } else if (weather.temperature >= 30) {
+      tips.push("High temperature - increase irrigation frequency, mulch to retain moisture");
+    } else if (weather.temperature <= 10) {
+      tips.push("Low temperature - protect seedlings, avoid overwatering");
+    }
+
+    // Humidity based tips
+    if (weather.humidity > 85) {
+      tips.push("Very high humidity - monitor for fungal/bacterial diseases, ensure air circulation");
+    } else if (weather.humidity > 70) {
+      tips.push("High humidity - check for pests and diseases");
+    } else if (weather.humidity < 30) {
+      tips.push("Low humidity - irrigate regularly, monitor for wilting");
+    }
+
+    // Wind
+    if (weather.windSpeed > 25) {
+      tips.push("Strong winds - support plants, avoid spraying chemicals");
+    }
+
+    // Fallback if not enough tips
+    if (tips.length < 2) tips.push("Monitor crops and adjust practices as needed");
+    return tips;
+  }
+
+  const todaysTips = getFarmingTips(weatherData);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
