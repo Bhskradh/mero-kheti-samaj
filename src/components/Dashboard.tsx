@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Cloud, 
   Thermometer, 
@@ -18,6 +19,10 @@ import { useState, useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import heroImage from "@/assets/hero-farming.jpg";
+import LocationSelector from "./LocationSelector";
+import CropGuide from "./CropGuide";
+import PlantDoctor from "./PlantDoctor";
+import Community from "./Community";
 
 interface WeatherData {
   location: string;
@@ -48,13 +53,15 @@ const Dashboard = () => {
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [loadingWeather, setLoadingWeather] = useState(true);
   const [loadingMarket, setLoadingMarket] = useState(true);
+  const [currentLocation, setCurrentLocation] = useState("Kathmandu");
+  const [activeModal, setActiveModal] = useState<string | null>(null);
   const { toast } = useToast();
 
-  const fetchWeatherData = async () => {
+  const fetchWeatherData = async (city = currentLocation) => {
     setLoadingWeather(true);
     try {
       const { data, error } = await supabase.functions.invoke('get-weather', {
-        body: { city: 'Kathmandu' }
+        body: { city }
       });
 
       if (error) throw error;
@@ -105,6 +112,19 @@ const Dashboard = () => {
     fetchMarketData();
   }, []);
 
+  const handleLocationChange = (newLocation: string) => {
+    setCurrentLocation(newLocation);
+    fetchWeatherData(newLocation);
+  };
+
+  const openModal = (modalType: string) => {
+    setActiveModal(modalType);
+  };
+
+  const closeModal = () => {
+    setActiveModal(null);
+  };
+
   const todaysTips = weatherData ? [
     weatherData.forecast,
     weatherData.temperature > 30 
@@ -138,7 +158,7 @@ const Dashboard = () => {
               <Button 
                 variant="outline" 
                 size="sm"
-                onClick={fetchWeatherData}
+                onClick={() => fetchWeatherData()}
                 disabled={loadingWeather}
               >
                 {loadingWeather ? (
@@ -148,10 +168,10 @@ const Dashboard = () => {
                 )}
                 Refresh
               </Button>
-              <Button variant="outline" size="sm">
-                <MapPin className="h-4 w-4 mr-2" />
-                {weatherData?.location?.split(',')[0] || 'Kathmandu'}
-              </Button>
+              <LocationSelector 
+                currentLocation={currentLocation}
+                onLocationChange={handleLocationChange}
+              />
             </div>
           </div>
         </div>
@@ -266,19 +286,35 @@ const Dashboard = () => {
 
         {/* Quick Actions */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Button variant="outline" className="h-20 flex-col space-y-2">
+          <Button 
+            variant="outline" 
+            className="h-20 flex-col space-y-2"
+            onClick={() => openModal('crop-guide')}
+          >
             <Sprout className="h-6 w-6 text-primary" />
             <span className="text-xs">Crop Guide</span>
           </Button>
-          <Button variant="outline" className="h-20 flex-col space-y-2">
+          <Button 
+            variant="outline" 
+            className="h-20 flex-col space-y-2"
+            onClick={() => openModal('plant-doctor')}
+          >
             <Camera className="h-6 w-6 text-accent" />
             <span className="text-xs">Plant Doctor</span>
           </Button>
-          <Button variant="outline" className="h-20 flex-col space-y-2">
+          <Button 
+            variant="outline" 
+            className="h-20 flex-col space-y-2"
+            onClick={() => openModal('market-prices')}
+          >
             <TrendingUp className="h-6 w-6 text-earth" />
             <span className="text-xs">Market Prices</span>
           </Button>
-          <Button variant="outline" className="h-20 flex-col space-y-2">
+          <Button 
+            variant="outline" 
+            className="h-20 flex-col space-y-2"
+            onClick={() => openModal('community')}
+          >
             <MessageCircle className="h-6 w-6 text-primary" />
             <span className="text-xs">Community</span>
           </Button>
@@ -339,6 +375,63 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Modals */}
+      <Dialog open={activeModal === 'crop-guide'} onOpenChange={closeModal}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Crop Guide</DialogTitle>
+          </DialogHeader>
+          <CropGuide />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={activeModal === 'plant-doctor'} onOpenChange={closeModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Plant Doctor</DialogTitle>
+          </DialogHeader>
+          <PlantDoctor />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={activeModal === 'community'} onOpenChange={closeModal}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Farming Community</DialogTitle>
+          </DialogHeader>
+          <Community />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={activeModal === 'market-prices'} onOpenChange={closeModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Market Prices - Kalimati</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {marketData?.prices?.map((item, index) => (
+              <div key={index} className="flex items-center justify-between py-2 border-b border-border/50 last:border-b-0">
+                <div className="flex items-center space-x-3">
+                  <div className="w-2 h-2 bg-primary rounded-full" />
+                  <span className="font-medium text-foreground">{item.crop}</span>
+                </div>
+                <div className="text-right">
+                  <p className="font-semibold text-foreground">{item.price}</p>
+                  <p className={`text-xs ${item.change.startsWith('+') ? 'text-success' : 'text-destructive'}`}>
+                    {item.change}
+                  </p>
+                </div>
+              </div>
+            )) || (
+              <div className="text-center py-4">
+                <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Loading market prices...</p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

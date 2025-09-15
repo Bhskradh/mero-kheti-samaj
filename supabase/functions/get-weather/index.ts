@@ -14,16 +14,25 @@ serve(async (req) => {
 
   try {
     const { city = 'Kathmandu' } = await req.json().catch(() => ({ city: 'Kathmandu' }));
+    
+    // Validate city input for Nepal locations
+    const validCities = [
+      'Kathmandu', 'Pokhara', 'Chitwan', 'Biratnagar', 'Birgunj', 'Dharan',
+      'Butwal', 'Janakpur', 'Nepalgunj', 'Bharatpur', 'Hetauda', 'Dhangadhi',
+      'Itahari', 'Tulsipur', 'Gorkha', 'Lumbini', 'Palpa', 'Syangja'
+    ];
+    
+    const cityName = validCities.includes(city) ? city : 'Kathmandu';
     const apiKey = Deno.env.get('OPENWEATHER_API_KEY');
 
     if (!apiKey) {
       throw new Error('Weather API key not configured');
     }
 
-    console.log(`Fetching weather data for ${city}`);
+    console.log(`Fetching weather data for ${cityName}`);
 
     // Get current weather
-    const currentWeatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${city},NP&appid=${apiKey}&units=metric`;
+    const currentWeatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${cityName},NP&appid=${apiKey}&units=metric`;
     const currentResponse = await fetch(currentWeatherUrl);
     
     if (!currentResponse.ok) {
@@ -33,7 +42,7 @@ serve(async (req) => {
     const currentData = await currentResponse.json();
 
     // Get 5-day forecast
-    const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?q=${city},NP&appid=${apiKey}&units=metric`;
+    const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?q=${cityName},NP&appid=${apiKey}&units=metric`;
     const forecastResponse = await fetch(forecastUrl);
     
     if (!forecastResponse.ok) {
