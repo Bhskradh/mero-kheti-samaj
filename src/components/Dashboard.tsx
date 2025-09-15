@@ -442,12 +442,21 @@ const Dashboard = () => {
       </Dialog>
 
       <Dialog open={activeModal === 'market-prices'} onOpenChange={closeModal}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-4xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Market Prices - Kalimati</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {marketData?.prices?.map((item, index) => (
+          <div className="relative w-full h-[80vh]">
+            <iframe 
+              src="https://nepalicalendar.rat32.com/vegetable/embed.php"
+              className="w-full h-full"
+              frameBorder="0"
+              scrolling="yes"
+              style={{ border: 'none', borderRadius: '8px' }}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
               <div key={index} className="flex items-center justify-between py-2 border-b border-border/50 last:border-b-0">
                 <div className="flex items-center space-x-3">
                   <div className="w-2 h-2 bg-primary rounded-full" />
