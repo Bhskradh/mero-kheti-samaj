@@ -80,25 +80,23 @@ const Community = () => {
       toast({ title: "Please wait", description: `You can send another message in ${cooldown}s`, variant: "destructive" });
       return;
     }
+
+    // Check if user is authenticated
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      toast({ title: "Authentication required", description: "Please log in to send messages", variant: "destructive" });
+      return;
+    }
+
     const name = (username && username.trim()) || "Anonymous";
-    // Optimistic update: create a temporary local message so it appears instantly
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    const now = new Date().toISOString();
-    const tempMsg: ChatRow = { id: tempId, username: name, message: input.trim(), inserted_at: now };
-    setMessages((m) => [...m, tempMsg]);
+    const message = input.trim();
     setInput("");
     localStorage.setItem("mk_username", name);
 
     try {
-      // Insert into DB. When Supabase realtime delivers the inserted row, we'll dedupe it.
-      const { data, error } = await sb.from("chats").insert([{ username: name, message: tempMsg.message }]).select();
+      const { error } = await sb.from("chats").insert([{ username: name, message }]);
       if (error) throw error;
 
-      // If DB returns the inserted row, replace the temp message ID with real ID
-      if (data && data.length > 0) {
-        const inserted = data[0] as ChatRow;
-        setMessages((m) => m.map((it) => (it.id === tempId ? inserted : it)));
-      }
       // Start 30s cooldown after successful send
       setCooldown(30);
       const timer = setInterval(() => setCooldown((c) => {
@@ -110,8 +108,6 @@ const Community = () => {
       }), 1000);
     } catch (error) {
       console.error("Send error:", error);
-      // remove the optimistic message on failure
-      setMessages((m) => m.filter((it) => it.id !== tempId));
       toast({ title: "Send Failed", description: "Could not send message", variant: "destructive" });
     }
   };

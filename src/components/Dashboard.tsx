@@ -19,8 +19,11 @@ import { useState, useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useNotifications } from "@/hooks/useNotifications";
+import { User, Session } from '@supabase/supabase-js';
+import { useNavigate } from 'react-router-dom';
 import heroImage from "@/assets/hero-farming.jpg";
 import LocationSelector from "./LocationSelector";
+import LocationModal from "./LocationModal";
 import CropGuide from "./CropGuide";
 import PlantDoctor from "./PlantDoctor";
 import Community from "./Community";
@@ -49,53 +52,104 @@ interface MarketData {
   source: string;
 }
 
-const Dashboard = () => {
-  const [isSupported, setIsSupported] = useState(false);
-  const [permission, setPermission] = useState<NotificationPermission>('default');
-  const [activeModal, setActiveModal] = useState<string | null>(null);
+interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  user_name?: string;
+}
 
-  const requestPermission = async () => {
-    try {
-      const result = await Notification.requestPermission();
-      setPermission(result);
-    } catch (error) {
-      console.error('Error requesting notification permission:', error);
-    }
-  };
-  const [currentLocation, setCurrentLocation] = useState("Kathmandu");
+const Dashboard = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
   const [marketData, setMarketData] = useState<MarketData | null>(null);
-  const [previousMarketData, setPreviousMarketData] = useState<MarketData | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [newTask, setNewTask] = useState("");
+  const [currentLocation, setCurrentLocation] = useState(() => {
+    return localStorage.getItem('user_location') || '';
+  });
+  const [showLocationModal, setShowLocationModal] = useState(!currentLocation);
+  const [showCropGuide, setShowCropGuide] = useState(false);
+  const [showPlantDoctor, setShowPlantDoctor] = useState(false);
+  const [showCommunity, setShowCommunity] = useState(false);
+  const [showMarketPrices, setShowMarketPrices] = useState(false);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [loadingMarket, setLoadingMarket] = useState(false);
   const { toast } = useToast();
-  const { sendWeatherAlert, sendMarketPriceAlert } = useNotifications();
+  const { requestPermission, sendNotification } = useNotifications();
+  const navigate = useNavigate();
 
-  const fetchWeatherData = async (city = currentLocation) => {
+  // Auth state management
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      
+      if (!session) {
+        navigate('/auth');
+      }
+    });
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      
+      if (!session) {
+        navigate('/auth');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [navigate]);
+
+  // Initialize app and request permissions
+  useEffect(() => {
+    if (!user || !currentLocation) return;
+
+    const initializeApp = async () => {
+      await requestPermission();
+      await fetchWeatherData();
+      await fetchMarketData();
+      await fetchTasks();
+    };
+
+    initializeApp();
+
+    // Auto-refresh data every 30 minutes
+    const interval = setInterval(async () => {
+      await fetchWeatherData();
+      await fetchMarketData();
+    }, 30 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [user, currentLocation]);
+
+  const fetchWeatherData = async () => {
+    if (!currentLocation) return;
+    
     setLoadingWeather(true);
     try {
       const { data, error } = await supabase.functions.invoke('get-weather', {
-        body: { city }
+        body: { location: currentLocation }
       });
-
+      
       if (error) throw error;
-      
-      setWeatherData(data);
-      
-      // Send weather alert if conditions warrant it
-      sendWeatherAlert(data, city);
-      
-      toast({
-        title: "Weather Updated",
-        description: "Latest weather data loaded successfully",
-      });
+      if (data) {
+        const prevTemp = weatherData?.temperature;
+        setWeatherData(data);
+        
+        // Send notification for significant temperature changes
+        if (prevTemp && Math.abs(data.temperature - prevTemp) >= 5) {
+          sendNotification({
+            title: 'Weather Alert',
+            body: `Temperature changed significantly in ${currentLocation}: ${data.temperature}°C`
+          });
+        }
+      }
     } catch (error) {
       console.error('Error fetching weather:', error);
-      toast({
-        title: "Weather Error",
-        description: "Could not fetch weather data",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to fetch weather data", variant: "destructive" });
     } finally {
       setLoadingWeather(false);
     }
@@ -105,108 +159,161 @@ const Dashboard = () => {
     setLoadingMarket(true);
     try {
       const { data, error } = await supabase.functions.invoke('get-market-prices');
-
+      
       if (error) throw error;
-      
-      // Send market price alert if there are significant changes
-      if (marketData) {
-        sendMarketPriceAlert(data.prices, marketData.prices);
+      if (data) {
+        const prevData = marketData;
+        setMarketData(data);
+        
+        // Send notification for significant price changes
+        if (prevData && data.prices.length > 0) {
+          const significantChanges = data.prices.filter(price => {
+            const prevPrice = prevData.prices.find(p => p.crop === price.crop);
+            return prevPrice && price.change.includes('+') && parseFloat(price.change) > 10;
+          });
+          
+          if (significantChanges.length > 0) {
+            sendNotification({
+              title: 'Market Alert',
+              body: `Significant price increases detected for ${significantChanges.map(p => p.crop).join(', ')}`
+            });
+          }
+        }
       }
-      
-      setPreviousMarketData(marketData);
-      setMarketData(data);
-      toast({
-        title: "Market Prices Updated",
-        description: `${data.prices.length} prices loaded from ${data.source}`,
-      });
     } catch (error) {
       console.error('Error fetching market data:', error);
-      toast({
-        title: "Market Data Error", 
-        description: "Could not fetch market prices",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to fetch market prices", variant: "destructive" });
     } finally {
       setLoadingMarket(false);
     }
   };
 
-  useEffect(() => {
-    fetchWeatherData();
-    fetchMarketData();
+  const fetchTasks = async () => {
+    if (!user) return;
     
-    // Auto-refresh data every 30 minutes
-    const interval = setInterval(() => {
-      fetchWeatherData();
-      fetchMarketData();
-    }, 30 * 60 * 1000);
+    try {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      setTasks(data || []);
+    } catch (error) {
+      console.error('Error fetching tasks:', error);
+      toast({ title: "Error", description: "Failed to fetch tasks", variant: "destructive" });
+    }
+  };
+
+  const addTask = async () => {
+    if (!newTask.trim() || !user) return;
     
-    return () => clearInterval(interval);
-  }, []);
+    try {
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert([{ 
+          title: newTask.trim(),
+          user_name: 'You',
+          user_id: user.id,
+          completed: false
+        }])
+        .select();
+      
+      if (error) throw error;
+      setTasks([...tasks, ...(data || [])]);
+      setNewTask("");
+      toast({ title: "Success", description: "Task added successfully!" });
+    } catch (error) {
+      console.error('Error adding task:', error);
+      toast({ title: "Error", description: "Failed to add task", variant: "destructive" });
+    }
+  };
+
+  const toggleTask = async (taskId: string) => {
+    if (!user) return;
+    
+    try {
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const { error } = await supabase
+        .from('tasks')
+        .update({ completed: !task.completed })
+        .eq('id', taskId)
+        .eq('user_id', user.id);
+      
+      if (error) throw error;
+      
+      setTasks(tasks.map(t => 
+        t.id === taskId ? { ...t, completed: !t.completed } : t
+      ));
+    } catch (error) {
+      console.error('Error toggling task:', error);
+      toast({ title: "Error", description: "Failed to update task", variant: "destructive" });
+    }
+  };
 
   const handleLocationChange = (newLocation: string) => {
     setCurrentLocation(newLocation);
-    fetchWeatherData(newLocation);
+    localStorage.setItem('user_location', newLocation);
+    fetchWeatherData();
   };
 
-  const openModal = (modalType: string) => {
-    setActiveModal(modalType);
-  };
-
-  const closeModal = () => {
-    setActiveModal(null);
-  };
-
-  // Generate farming tips based on actual weather data
-  function getFarmingTips(weather: WeatherData | null): string[] {
-    if (!weather) {
-      return [
-        "Loading farming recommendations...",
-        "Preparing daily tips based on weather",
-        "Analyzing optimal farming conditions"
-      ];
+  const handleLocationModalClose = (location?: string) => {
+    if (location) {
+      setCurrentLocation(location);
+      localStorage.setItem('user_location', location);
+    } else {
+      setCurrentLocation('Kathmandu');
+      localStorage.setItem('user_location', 'Kathmandu');
     }
+    setShowLocationModal(false);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/auth');
+  };
+
+  const handleRefresh = async () => {
+    await Promise.all([fetchWeatherData(), fetchMarketData()]);
+    toast({ title: "Success", description: "Data refreshed successfully!" });
+  };
+
+  const getFarmingTips = (weather: WeatherData | null): string[] => {
+    if (!weather) return ["Loading farming tips..."];
+    
     const tips: string[] = [];
-    // Always show forecast/summary
-    if (weather.forecast) tips.push(weather.forecast);
-
-    // Weather condition based tips
-    const cond = weather.condition.toLowerCase();
-    if (cond.includes("rain") || cond.includes("shower") || cond.includes("drizzle")) {
-      tips.push("Rain expected - avoid pesticide/fertilizer application, check drainage, postpone irrigation");
-    } else if (cond.includes("clear") || cond.includes("sun")) {
-      tips.push("Clear weather - good for harvesting, drying crops, and field work");
-    } else if (cond.includes("cloud")) {
-      tips.push("Cloudy weather - monitor for fungal diseases, reduce irrigation if soil is moist");
-    } else if (cond.includes("storm") || cond.includes("wind")) {
-      tips.push("Windy/stormy - secure greenhouses, support tall crops, avoid spraying");
+    
+    if (weather.temperature > 30) {
+      tips.push("🌡️ High temperature detected - ensure adequate irrigation");
+      tips.push("🌳 Provide shade for sensitive crops");
+    } else if (weather.temperature < 10) {
+      tips.push("❄️ Cool weather - protect crops from frost");
+      tips.push("🏠 Consider greenhouse cultivation");
     }
-
-    // Temperature based tips
-    if (weather.temperature >= 35) {
-      tips.push("Very high temperature - irrigate early morning/evening, provide shade if possible");
-    } else if (weather.temperature >= 30) {
-      tips.push("High temperature - increase irrigation frequency, mulch to retain moisture");
-    } else if (weather.temperature <= 10) {
-      tips.push("Low temperature - protect seedlings, avoid overwatering");
+    
+    if (weather.humidity > 80) {
+      tips.push("💧 High humidity - watch for fungal diseases");
+      tips.push("🌬️ Ensure good air circulation");
+    } else if (weather.humidity < 40) {
+      tips.push("🏜️ Low humidity - increase watering frequency");
     }
-
-    // Humidity based tips
-    if (weather.humidity > 85) {
-      tips.push("Very high humidity - monitor for fungal/bacterial diseases, ensure air circulation");
-    } else if (weather.humidity > 70) {
-      tips.push("High humidity - check for pests and diseases");
-    } else if (weather.humidity < 30) {
-      tips.push("Low humidity - irrigate regularly, monitor for wilting");
+    
+    if (weather.condition.toLowerCase().includes('rain')) {
+      tips.push("🌧️ Rainy conditions - check drainage systems");
+      tips.push("🛡️ Apply fungicide if necessary");
+    } else if (weather.condition.toLowerCase().includes('sunny')) {
+      tips.push("☀️ Sunny weather - perfect for harvesting");
+      tips.push("💦 Monitor soil moisture levels");
     }
-
-    // Wind
-    if (weather.windSpeed > 25) {
-      tips.push("Strong winds - support plants, avoid spraying chemicals");
+    
+    if (tips.length === 0) {
+      tips.push("🌱 Great weather for farming activities!");
+      tips.push("📋 Good time to plan your next planting cycle");
     }
-
-    // Fallback if not enough tips
-    if (tips.length < 2) tips.push("Monitor crops and adjust practices as needed");
+    
     return tips;
   }
 
@@ -214,264 +321,259 @@ const Dashboard = () => {
     ? ["Loading farming tips for selected location..."]
     : getFarmingTips(weatherData);
 
+  if (!user) return null;
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-secondary/20">
+      <LocationModal 
+        isOpen={showLocationModal} 
+        onClose={handleLocationModalClose} 
+      />
+      
       {/* Header */}
-      <header className="bg-card shadow-sm border-b">
+      <div className="bg-card/50 backdrop-blur-sm border-b border-border/20">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="p-2 bg-primary rounded-lg">
-                <Sprout className="h-6 w-6 text-primary-foreground" />
+              <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
+                <Sprout className="h-6 w-6 text-primary" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-foreground">Agro-Guide</h1>
+                <h1 className="text-2xl font-bold text-foreground">Agro-Guide</h1>
                 <p className="text-sm text-muted-foreground">Smart Farming Assistant</p>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
-              {isSupported && permission !== 'granted' && (
-                <Button 
-                  variant="ghost" 
-                  size="sm"
-                  onClick={requestPermission}
-                  className="text-xs"
-                >
-                  🔔 Enable Alerts
-                </Button>
-              )}
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => fetchWeatherData()}
-                disabled={loadingWeather}
-              >
-                {loadingWeather ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                )}
-                Refresh
-              </Button>
+            <div className="flex items-center space-x-3">
               <LocationSelector 
                 currentLocation={currentLocation}
                 onLocationChange={handleLocationChange}
               />
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Hero Section */}
-      <div className="relative overflow-hidden bg-gradient-to-r from-primary to-primary/80">
-        <div 
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-20"
-          style={{ backgroundImage: `url(${heroImage})` }}
-        />
-        <div className="relative container mx-auto px-4 py-8">
-          <div className="text-center text-primary-foreground">
-            <h2 className="text-2xl md:text-3xl font-bold mb-2">
-              नमस्कार, Farmer! 🌾
-            </h2>
-            <p className="text-primary-foreground/90 mb-4">
-              Your smart farming companion for better harvests
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                Weather Updates
-              </span>
-              <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                Crop Guidance
-              </span>
-              <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                Market Prices
-              </span>
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                Logout
+              </Button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main Dashboard */}
-      <div className="container mx-auto px-4 py-6 space-y-6">
-        {/* Weather Card */}
-        <Card className="shadow-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center justify-between text-lg">
-              <div className="flex items-center">
-                <Cloud className="h-5 w-5 mr-2 text-primary" />
-                Weather Today
-              </div>
-              {loadingWeather && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-2xl font-bold text-foreground">
-                  {weatherData?.temperature || '--'}°C
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {weatherData?.condition || 'Loading...'}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm text-muted-foreground">
-                  {weatherData?.location || 'Kathmandu, Nepal'}
-                </p>
-                <p className="text-sm font-medium text-accent">
-                  {weatherData?.description || 'Fetching forecast...'}
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4 pt-3 border-t">
-              <div className="text-center">
-                <Thermometer className="h-4 w-4 mx-auto mb-1 text-earth" />
-                <p className="text-xs text-muted-foreground">Temperature</p>
-                <p className="text-sm font-medium">
-                  {weatherData?.temperature || '--'}°C
-                </p>
-              </div>
-              <div className="text-center">
-                <Droplets className="h-4 w-4 mx-auto mb-1 text-accent" />
-                <p className="text-xs text-muted-foreground">Humidity</p>
-                <p className="text-sm font-medium">
-                  {weatherData?.humidity || '--'}%
-                </p>
-              </div>
-              <div className="text-center">
-                <Wind className="h-4 w-4 mx-auto mb-1 text-primary" />
-                <p className="text-xs text-muted-foreground">Wind</p>
-                <p className="text-sm font-medium">
-                  {weatherData?.windSpeed || '--'} km/h
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Hero Section */}
+      <div className="relative h-64 overflow-hidden">
+        <img 
+          src={heroImage} 
+          alt="Farming landscape" 
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-background/80 to-background/40" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center">
+            <h2 className="text-4xl font-bold text-foreground mb-2">Smart Farming for Nepal</h2>
+            <p className="text-lg text-muted-foreground">Real-time weather, market prices, and farming insights</p>
+          </div>
+        </div>
+      </div>
 
-        {/* Today's Tips */}
-        <Card className="shadow-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center text-lg">
-              <Calendar className="h-5 w-5 mr-2 text-accent" />
-              Today's Farming Tips
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2">
-              {todaysTips.map((tip, index) => (
-                <li key={index} className="flex items-start space-x-2">
-                  <div className="w-2 h-2 bg-accent rounded-full mt-2 flex-shrink-0" />
-                  <p className="text-sm text-foreground">{tip}</p>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-
+      <div className="container mx-auto px-4 py-8">
         {/* Quick Actions */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <Button 
             variant="outline" 
-            className="h-20 flex-col space-y-2"
-            onClick={() => openModal('crop-guide')}
+            className="h-20 flex flex-col items-center justify-center space-y-2 hover:bg-primary/5"
+            onClick={() => setShowCropGuide(true)}
           >
             <Sprout className="h-6 w-6 text-primary" />
-            <span className="text-xs">Crop Guide</span>
+            <span className="text-sm font-medium">Crop Guide</span>
           </Button>
           <Button 
             variant="outline" 
-            className="h-20 flex-col space-y-2"
-            onClick={() => openModal('plant-doctor')}
+            className="h-20 flex flex-col items-center justify-center space-y-2 hover:bg-primary/5"
+            onClick={() => setShowPlantDoctor(true)}
           >
-            <Camera className="h-6 w-6 text-accent" />
-            <span className="text-xs">Plant Doctor</span>
+            <Camera className="h-6 w-6 text-primary" />
+            <span className="text-sm font-medium">Plant Doctor</span>
           </Button>
           <Button 
             variant="outline" 
-            className="h-20 flex-col space-y-2"
-            onClick={() => openModal('market-prices')}
+            className="h-20 flex flex-col items-center justify-center space-y-2 hover:bg-primary/5"
+            onClick={() => setShowMarketPrices(true)}
           >
-            <TrendingUp className="h-6 w-6 text-earth" />
-            <span className="text-xs">Market Prices</span>
+            <TrendingUp className="h-6 w-6 text-primary" />
+            <span className="text-sm font-medium">Market Prices</span>
           </Button>
           <Button 
             variant="outline" 
-            className="h-20 flex-col space-y-2"
-            onClick={() => openModal('community')}
+            className="h-20 flex flex-col items-center justify-center space-y-2 hover:bg-primary/5"
+            onClick={() => setShowCommunity(true)}
           >
             <MessageCircle className="h-6 w-6 text-primary" />
-            <span className="text-xs">Community</span>
+            <span className="text-sm font-medium">Community</span>
           </Button>
         </div>
 
-        {/* Market Prices */}
-        <Card className="shadow-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center justify-between text-lg">
-              <div className="flex items-center">
-                <TrendingUp className="h-5 w-5 mr-2 text-earth" />
-                Market Prices - Kalimati
-              </div>
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Weather Card */}
+          <Card className="shadow-card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Weather Conditions</CardTitle>
               <div className="flex items-center space-x-2">
-                {loadingMarket && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 <Button 
                   variant="ghost" 
-                  size="sm"
-                  onClick={fetchMarketData}
-                  disabled={loadingMarket}
+                  size="sm" 
+                  onClick={handleRefresh}
+                  disabled={loadingWeather}
                 >
-                  <RefreshCw className="h-3 w-3" />
+                  {loadingWeather ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 </Button>
+                <Cloud className="h-4 w-4 text-muted-foreground" />
               </div>
+            </CardHeader>
+            <CardContent>
+              {loadingWeather ? (
+                <div className="space-y-2">
+                  <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
+                </div>
+              ) : weatherData ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl font-bold">{weatherData.temperature}°C</span>
+                    <div className="text-right">
+                      <div className="text-sm font-medium">{weatherData.condition}</div>
+                      <div className="text-xs text-muted-foreground">{weatherData.location}</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="flex items-center space-x-2">
+                      <Droplets className="h-4 w-4 text-blue-500" />
+                      <span>{weatherData.humidity}% Humidity</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Wind className="h-4 w-4 text-gray-500" />
+                      <span>{weatherData.windSpeed} km/h</span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Last updated: {new Date(weatherData.lastUpdated).toLocaleTimeString()}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">No weather data available</div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Market Prices Card */}
+          <Card className="shadow-card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Market Prices</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {loadingMarket ? (
+                <div className="space-y-2">
+                  <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-4 bg-gray-200 rounded animate-pulse w-2/3"></div>
+                  <div className="h-4 bg-gray-200 rounded animate-pulse w-1/2"></div>
+                </div>
+              ) : marketData && marketData.prices.length > 0 ? (
+                <div className="space-y-2">
+                  {marketData.prices.slice(0, 4).map((price, index) => (
+                    <div key={index} className="flex justify-between items-center text-sm">
+                      <span className="font-medium">{price.crop}</span>
+                      <div className="text-right">
+                        <div>{price.price}</div>
+                        <div className={`text-xs ${
+                          price.change.includes('+') ? 'text-green-600' : 
+                          price.change.includes('-') ? 'text-red-600' : 'text-gray-500'
+                        }`}>
+                          {price.change}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted-foreground pt-2">
+                    Source: {marketData.source} • {new Date(marketData.lastUpdated).toLocaleDateString()}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">No market data available</div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Tasks Card */}
+          <Card className="shadow-card">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Your Tasks</CardTitle>
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    placeholder="Add a new task..."
+                    value={newTask}
+                    onChange={(e) => setNewTask(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && addTask()}
+                    className="flex-1 px-3 py-2 text-sm border rounded-md border-input bg-background"
+                  />
+                  <Button size="sm" onClick={addTask}>Add</Button>
+                </div>
+                <div className="space-y-2 max-h-32 overflow-y-auto">
+                  {tasks.slice(0, 4).map((task) => (
+                    <div key={task.id} className="flex items-center space-x-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={task.completed}
+                        onChange={() => toggleTask(task.id)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className={task.completed ? "line-through text-muted-foreground" : "text-foreground"}>
+                        {task.title}
+                      </span>
+                    </div>
+                  ))}
+                  {tasks.length === 0 && (
+                    <div className="text-sm text-muted-foreground">No tasks yet. Add one above!</div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Farming Tips */}
+        <Card className="mt-6 shadow-card">
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Sprout className="h-5 w-5 text-primary" />
+              <span>Today's Farming Tips</span>
             </CardTitle>
-            {marketData?.source && (
-              <p className="text-xs text-muted-foreground">
-                Source: {marketData.source} • Updated: {
-                  marketData.lastUpdated ? 
-                  new Date(marketData.lastUpdated).toLocaleTimeString() : 
-                  'Loading...'
-                }
-              </p>
-            )}
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {marketData?.prices?.slice(0, 6).map((item, index) => (
-                <div key={index} className="flex items-center justify-between py-2 border-b border-border/50 last:border-b-0">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-2 h-2 bg-primary rounded-full" />
-                    <span className="font-medium text-foreground">{item.crop}</span>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-foreground">{item.price}</p>
-                    <p className={`text-xs ${item.change.startsWith('+') ? 'text-success' : 'text-destructive'}`}>
-                      {item.change}
-                    </p>
-                  </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              {todaysTips.map((tip, index) => (
+                <div key={index} className="flex items-start space-x-3 p-3 bg-muted/30 rounded-lg">
+                  <div className="w-2 h-2 bg-primary rounded-full mt-2 flex-shrink-0" />
+                  <p className="text-sm text-foreground">{tip}</p>
                 </div>
-              )) || (
-                <div className="text-center py-4">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Loading market prices...</p>
-                </div>
-              )}
+              ))}
             </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Modals */}
-      <Dialog open={activeModal === 'crop-guide'} onOpenChange={closeModal}>
+      <Dialog open={showCropGuide} onOpenChange={setShowCropGuide}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Crop Guide</DialogTitle>
+            <DialogTitle>Crop Growing Guide</DialogTitle>
           </DialogHeader>
           <CropGuide />
         </DialogContent>
       </Dialog>
 
-      <Dialog open={activeModal === 'plant-doctor'} onOpenChange={closeModal}>
+      <Dialog open={showPlantDoctor} onOpenChange={setShowPlantDoctor}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Plant Doctor</DialogTitle>
@@ -480,8 +582,8 @@ const Dashboard = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={activeModal === 'community'} onOpenChange={closeModal}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+      <Dialog open={showCommunity} onOpenChange={setShowCommunity}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Farming Community</DialogTitle>
           </DialogHeader>
@@ -489,19 +591,35 @@ const Dashboard = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={activeModal === 'market-prices'} onOpenChange={closeModal}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
+      <Dialog open={showMarketPrices} onOpenChange={setShowMarketPrices}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Market Prices - Kalimati</DialogTitle>
+            <DialogTitle>Market Prices</DialogTitle>
           </DialogHeader>
-          <div className="relative w-full h-[80vh]">
-            <iframe 
-              src="https://nepalicalendar.rat32.com/vegetable/embed.php"
-              className="w-full h-full"
-              frameBorder="0"
-              scrolling="yes"
-              style={{ border: 'none', borderRadius: '8px' }}
-            />
+          <div className="space-y-4">
+            {marketData && marketData.prices.length > 0 ? (
+              <div className="grid gap-4">
+                {marketData.prices.map((price, index) => (
+                  <div key={index} className="flex justify-between items-center p-3 bg-muted/30 rounded-lg">
+                    <div>
+                      <span className="font-medium">{price.crop}</span>
+                      <span className="text-sm text-muted-foreground ml-2">per {price.unit}</span>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold">{price.price}</div>
+                      <div className={`text-sm ${
+                        price.change.includes('+') ? 'text-green-600' : 
+                        price.change.includes('-') ? 'text-red-600' : 'text-gray-500'
+                      }`}>
+                        {price.change}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center text-muted-foreground">No market data available</div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

@@ -14,7 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      chats: {
+        Row: {
+          id: string
+          inserted_at: string
+          message: string | null
+          username: string | null
+        }
+        Insert: {
+          id?: string
+          inserted_at?: string
+          message?: string | null
+          username?: string | null
+        }
+        Update: {
+          id?: string
+          inserted_at?: string
+          message?: string | null
+          username?: string | null
+        }
+        Relationships: []
+      }
+      tasks: {
+        Row: {
+          completed: boolean | null
+          created_at: string
+          details: string | null
+          due_at: string | null
+          id: string
+          remind_before: number | null
+          title: string
+          user_id: string | null
+          user_name: string | null
+        }
+        Insert: {
+          completed?: boolean | null
+          created_at?: string
+          details?: string | null
+          due_at?: string | null
+          id?: string
+          remind_before?: number | null
+          title: string
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Update: {
+          completed?: boolean | null
+          created_at?: string
+          details?: string | null
+          due_at?: string | null
+          id?: string
+          remind_before?: number | null
+          title?: string
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
